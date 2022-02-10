@@ -5,6 +5,7 @@
 ### Library ----
 library(plyr)
 library(tidyverse)
+library(vegan)
 
 ### Importing the data ----
 # areas where lupine previously wasn't present but is now 
@@ -284,8 +285,8 @@ t.test(richness ~ presence, richness_control)
   # p = 0.1012, t = -2.1213, DF = 4
   # NOT significantly different 
 
+
 ## NMDS to compare communities 
-library(vegan)
 # past vs. present communities 
 natives <- natives %>% 
               mutate(presence = case_when(Slutdatum < 1995-01-01 ~ "absent",
@@ -298,22 +299,39 @@ natives <- natives %>%
                                            Area == "1" & presence == "present" ~ "present1",
                                            Area == "2" & presence == "present" ~ "present2",
                                            Area == "3" & presence == "present" ~ "present3",
-                                           Area == "4" & presence == "present" ~ "present4")) %>% 
-              mutate(abundance = )
+                                           Area == "4" & presence == "present" ~ "present4")) %>%
+              group_by(groupings) %>% 
+              add_count(Artnamn, name = "abundance")
 
-taxa <- unique(natives$Artnamn) #creates list of each unique species
-samples <- sort(unique(natives$groupings)) #creates list of each unique site or sample
+natives_short <- natives %>% 
+                    dplyr::select(Artnamn, groupings, abundance) %>% 
+                    mutate(abundance = as.numeric(abundance)) %>% 
+                    pivot_wider(names_from = Artnamn,
+                                values_from = abundance,
+                                values_fn = mean)
 
-#make empty matrix ready to fill in
-matrix1 <- matrix(nrow = length(samples), ncol = length(taxa), dimnames = list(samples, taxa))
+natives_short[is.na(natives_short)] <- 0   # converting NA's to 0
 
-for(r in 1:nrow(LL.data)){
-  samp <- LL.data[r, 8]
-  tax <- LL.data[r, 1]
-  matrix1[samp,tax] <- LL.data[r, 3]
-} # 1, 2, 3 here relate the the column number in the raw data in which the sample name, 
-# species name and data are in
+# making 'groupings' to row names
+natives_short <- data.frame(natives_short, row.names = "groupings")  
+natives_short <- as.matrix(natives_short)   # making it a matrix 
 
-matrix1[is.na(matrix1)] <- 0   #convert NA's to 0
+str(natives_short)
 
-time_NMDS <- metaMDS(natives, k = 2, trymax = 100)
+# doing the ordination (distance matrix)
+time_NMDS <- metaMDS(natives_short, distance = "bray", k = 2)
+# no convergence, not enough data 
+
+library(ape)
+
+biplot(pcoa(vegdist(natives_short, "bray")))
+
+library(ggfortify)
+pca_res <- prcomp(natives_short, scale. = TRUE)
+autoplot(pca_res, label = T, loadings = T)
+
+
+natives_dist <- vegdist(natives_short, "bray")
+res <- pcoa(natives_dist)
+res$values
+biplot(res)

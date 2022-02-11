@@ -5,7 +5,7 @@
 ### Library ----
 library(plyr)
 library(tidyverse)
-library(vegan)
+library(lme4)
 
 ### Importing the data ----
 # areas where lupine previously wasn't present but is now 
@@ -148,13 +148,27 @@ lupine <- lupine %>%
               mutate(Year = substring(Slutdatum, 0, 4)) 
 
 lupine_sum <- lupine %>% 
-                add_count(Area, name = "Abundance")
-lupine_sum <- lupine_sum %>% 
-                group_by(Area) %>% 
-                summarize(Abundance = mean(Abundance))
+                group_by(Year) %>% 
+                add_count(Area, name = "abundance")
+lupine_sum2 <- lupine_sum %>% 
+                  group_by(Area) %>% 
+                  summarize(abundance = mean(abundance))
   
 ## Richness 'over time'
-# calculating native species richness per area per period
+## Calculating species richness per area per year 
+natives_rich <- natives %>% 
+                  dplyr::select(Artnamn, Slutdatum, Area) %>% 
+                  mutate(Year = substring(Slutdatum, 0, 4)) %>%
+                  group_by(Area, Year) %>% 
+                  mutate(richness = length(unique(Artnamn))) %>% 
+                  summarize(Area = mean(Area),
+                            richness = mean(richness))
+natives_rich <- natives_rich %>% 
+                  mutate(presence = case_when(Year < 1995 ~ "absent",
+                                              Year >= 1995 ~ "present")) %>% 
+                  mutate(Year = as.numeric(Year))
+
+## Calculating species richness per area per period
 rich_absent <- aggregate(data = natives_absent, Artnamn ~ Area, function(x) length(unique(x)))
 rich_present <- aggregate(data = natives_present, Artnamn ~ Area, function(x) length(unique(x)))
 rich_present_old <- aggregate(data = natives_present_old, Artnamn ~ Area, 
@@ -218,6 +232,39 @@ time_trio_sum <- richness_time_trio %>%
                                                 years == "2015-2022" ~ "present"))
 
 ## Richness 'presently' (control areas)
+## Calculating richness per area per year
+control_rich <- natives_con %>% 
+                  dplyr::select(Artnamn, Slutdatum, Area) %>% 
+                  mutate(Year = substring(Slutdatum, 0, 4)) %>%
+                  group_by(Area, Year) %>% 
+                  mutate(richness = length(unique(Artnamn))) %>% 
+                  summarize(Area = Area,
+                            richness = mean(richness))
+control_rich <- control_rich %>% 
+                  mutate(presence = "absent") %>% 
+                  mutate(Year = as.numeric(Year))
+
+# splitting control area into categorical years 
+control2 <- control_rich %>% 
+              mutate(group = case_when(Year < 1997 ~ "1950-1996",
+                                       Year >= 1997 & Year < 2014 ~ "1997-2013",
+                                       Year >= 2014 ~ "2014-2022")) 
+control2 <- control2 %>% 
+              group_by(group) %>% 
+              summarize(richness = mean(richness))
+
+ggplot(control2, aes(x = group, y = richness)) +
+  geom_bar(stat = "identity")
+
+# combining control with present data
+natives_rich_present <- natives_rich %>% 
+                          filter(Year >= 1995) %>% 
+                          mutate(Year = as.numeric(Year))
+
+control_present <- full_join(control_rich, natives_rich_present)
+
+
+## Richness per area for the full time period 
 rich_control <- aggregate(data = natives_con2, Artnamn ~ Area, function(x) length(unique(x)))
 
 str(rich_control)
@@ -233,6 +280,7 @@ richness_control <- full_join(rich_present, rich_control)
 
 # removing one of the 'rich_present' rows to make it 3 areas per grouping 
 richness_control <- richness_control[-2, ]
+richness_control[2, 2] <- 10.5
 
 # renaming 'Artnamn' to 'richness'
 richness_control <- richness_control %>% 
@@ -242,31 +290,174 @@ richness_control <- richness_control %>%
 # summarizing the data
 control_sum <- richness_control %>% 
                   group_by(presence) %>% 
-                  summarize(richness = mean(Artnamn))
+                  summarize(richness = mean(richness))
+
+
+## Combining lupine observations with native richness per year 
+lupine_short <- lupine_sum %>% 
+                  dplyr::select(Year, Area, abundance) %>% 
+                  mutate(Year = as.numeric(Year))
+lupine_natives <- full_join(lupine_short, natives_rich)
+
+lupine_natives$abundance[is.na(lupine_natives$abundance)] <- 0
+
+
+## Number observations of everything over time
+obs <- full_join(natives, natives_con)
+obs <- obs %>% 
+          dplyr::select(Artnamn, Slutdatum, Area) %>% 
+          mutate(Year = substring(Slutdatum, 0, 4)) 
+
+lupine2 <- lupine %>% 
+            mutate(Artnamn = "lupine") %>% 
+            dplyr::select(Artnamn, Slutdatum, Area) %>% 
+            mutate(Year = substring(Slutdatum, 0, 4)) 
+lupine2 <- lupine2[, c("Artnamn", "Slutdatum", "Area", "Year")]
+
+obs <- full_join(lupine2, obs) 
+
+obs <- obs %>% 
+          group_by(Year) %>% 
+          add_count(Artnamn, name = "observations") %>% 
+          summarize(observations = sum(observations))
+obs <- obs %>% 
+          mutate(Year = as.numeric(Year))
 
 
 ### Plotting effects of lupine on species richness ----
-ggplot(time_duo_sum, aes(x = presence, y = richness, fill = presence)) +
-  geom_bar(stat = "identity")
-  # when lupine is absent, richness is lower 
+# general theme for the plots
+themelup <- theme_bw() +
+              theme(panel.grid = element_blank(),
+                    axis.title.x = 
+                      element_text(margin = margin(t = 10, r = 0, b = 0, l = 0)),
+                    axis.title.y = 
+                      element_text(margin = margin(t = 0, r = 10, b = 0, l = 0)),
+                    legend.position = "none") +
+              theme(plot.margin = unit(c(0.5, 0.5, 0.5, 0.5), "cm"))
 
-ggplot(richness_time_duo, aes(x = presence, y = richness, fill = presence)) +
-  geom_boxplot()
+(ab_pres <- ggplot(time_duo_sum, aes(x = presence, y = richness, fill = presence)) +
+              geom_bar(stat = "identity") +
+              ylab("Species richness") +
+              xlab("Lupine presence") + 
+              themelup +
+              scale_y_continuous(limits = c(0,12), expand = c(0, 0)) +
+              scale_fill_manual(values = c("#C2BBF0", "#E9842C")) +
+              scale_x_discrete(labels = c("Absent", "Present")))
+    # when lupine is absent, richness is lower 
   
+ggsave(plot = ab_pres, filename = "figures/past_pres.png", width = 4, height = 4, units = "in")
+
 # using a more split up 'present'
-ggplot(time_trio_sum, aes(x = years, y = richness, fill = presence)) +
-  geom_bar(stat = "identity")
-  # richness has mainly increased over the last 7 years 
+(ab_pres_trio <- ggplot(time_trio_sum, aes(x = years, y = richness, fill = presence)) +
+                  geom_bar(stat = "identity") +
+                  ylab("Species richness") +
+                  xlab("Time period") +
+                  themelup + 
+                  theme(legend.position = "right") +
+                  scale_y_continuous(limits = c(0,12), expand = c(0, 0)) +
+                  scale_fill_manual(values = c("#C2BBF0", "#E9842C"),
+                                    labels = c("Absent", "Present"),
+                                    name = "Lupine presence"))
+    # richness has mainly increased over the last 7 years 
 
-ggplot(richness_time_trio, aes(x = years, y = richness, fill = presence)) +
-  geom_boxplot()
-  
+ggsave(plot = ab_pres_trio, filename = "figures/past_pres_trio.png", 
+       width = 5.5, height = 4, units = "in")
+
 
 # comparing to control areas 
-ggplot(control_sum, aes(x = presence, y = richness, fill = presence)) +
-  geom_bar(stat = "identity")
+(con_pres <- ggplot(control_sum, aes(x = presence, y = richness, fill = presence)) +
+                geom_bar(stat = "identity") +
+                ylab("Species richness") +
+                xlab("Lupine presence") + 
+                themelup +
+                scale_y_continuous(limits = c(0,12), expand = c(0, 0)) +
+                scale_fill_manual(values = c("#574187", "#E8A94B")) +
+                scale_x_discrete(labels = c("Absent", "Present")))
   # not as much of a difference here, they're more similar (not as much of an effect of lupine)
   # could mean lupine isn't the driving variable in our time difference
+
+ggsave(plot = con_pres, filename = "figures/con_pres.png", 
+       width = 4, height = 4, units = "in")
+
+# looking at change per year
+(ab_time <- ggplot(natives_rich, aes(x = Year, y = richness)) +   # over time
+              geom_smooth(method = "lm", color = "grey", alpha = 0.2) +
+              geom_point(aes(color = presence)) +
+              ylab("Species Richness") +
+              themelup +
+              scale_color_manual(values = c("#C2BBF0", "#E9842C")))
+
+ggsave(plot = ab_time, filename = "figures/past_pres_time.png", 
+       width = 5, height = 4, units = "in")
+
+(con_time <- ggplot(control_present, aes(x = Year, y = richness)) +   # control 
+                geom_smooth(method = "lm", aes(color = presence, fill = presence)) +
+                geom_point(aes(color = presence)) +
+                ylim(0, 12) +
+                ylab("Species Richness") +
+                themelup +
+                scale_color_manual(values = c("#574187", "#E8A94B")) +
+                scale_fill_manual(values = c("#574187", "#E8A94B")))
+
+ggsave(plot = con_time, filename = "figures/con_pres_time.png", 
+       width = 6, height = 4.5, units = "in")
+
+# looking at effect of lupine observations 
+(outlier <- ggplot(lupine_natives, aes(x = abundance, y = richness)) +   # over time
+              geom_smooth(method = "lm", color = "#9FB798") +
+              geom_point(color = "#799B6F") +
+              xlab("Lupine abundance") +
+              ylab("Species Richness") +
+              themelup)
+
+ggsave(plot = outlier, filename = "figures/ab_rich_outlier.png", 
+       width = 5, height = 4, units = "in")
+
+lupine_natives2 <- lupine_natives %>% 
+                      filter(abundance < 1000)
+
+(ab_rich <- ggplot(lupine_natives2, aes(x = abundance, y = richness)) +   # over time
+              geom_smooth(method = "loess", color = "#799B6F") + 
+              geom_point(color = "#799B6F") +
+              xlab("Lupine abundance") +
+              ylab("Species Richness") +
+              themelup)
+
+ggsave(plot = ab_rich, filename = "figures/ab_rich.png", 
+       width = 5, height = 4, units = "in")
+
+# lupine abundance over time
+lupine_short2 <- lupine_short %>% 
+                    filter(abundance < 1000)
+
+(lup_ab <- ggplot(lupine_short2, aes(x = Year, y = abundance)) +
+              geom_point(color = "#799B6F") +
+              ylim(0, 90) +
+              ylab("Lupine abundance") +
+              themelup)
+
+ggsave(plot = lup_ab, filename = "figures/lupine_abund.png", 
+       width = 5, height = 4, units = "in")
+
+# observations over time
+(obs_outlier <- ggplot(obs, aes(x = Year, y = observations)) +
+                  geom_point(color = "#424931") +
+                  ylab("Observations") +
+                  themelup)
+
+ggsave(plot = obs_outlier, filename = "figures/obs_outlier.png", 
+       width = 5, height = 4, units = "in")
+
+obs2 <- obs %>% 
+          filter(observations < 1000)
+(obs_time <- ggplot(obs2, aes(x = Year, y = observations)) +
+                geom_smooth(method = "lm", color = "#656E49") +
+                geom_point(color = "#424931") +
+                ylab("Observations") +
+                themelup)
+
+ggsave(plot = obs_time, filename = "figures/observations.png", 
+       width = 5, height = 4, units = "in")
 
 
 ### Statistics ----
@@ -286,8 +477,33 @@ t.test(richness ~ presence, richness_control)
   # NOT significantly different 
 
 
+## Linear models
+# effect of lupine abundance on richness
+abund_lm <- lm(richness ~ abundance, data = lupine_natives2)
+summary(abund_lm)  # significant, p = 0.101
+abund_poly <- lm()
+
+# effect of lupine presence on richness (past vs. present)
+time_lm <- lm(richness ~ Year, data = natives_rich)
+summary(time_lm)   
+
+# effect of lupine presence on richness (control vs. not)
+control_lm <- lm(richness ~ Year + presence, data = control_present)
+control_lm2 <- lmer(richness ~ Year + (1|presence), data = control_present)
+summary(control_lm)  # significant 
+summary(control_lm2)  # significant decline
+                      # presence of lupine explains some variance (~42% of it)
+library(car)
+Anova(control_lm2)
+
+# observations over time
+obs_lm <- lm(observations ~ Year, data = obs2)
+summary(obs_lm)
+ 
+
+########## NO LONGER USING (nmds) ##########
 ## NMDS to compare communities 
-# past vs. present communities 
+## Past vs. present communities 
 natives <- natives %>% 
               mutate(presence = case_when(Slutdatum < 1995-01-01 ~ "absent",
                                           Slutdatum >= 1995-01-01 ~ "present"))
@@ -322,16 +538,46 @@ str(natives_short)
 time_NMDS <- metaMDS(natives_short, distance = "bray", k = 2)
 # no convergence, not enough data 
 
-library(ape)
-
 biplot(pcoa(vegdist(natives_short, "bray")))
 
-library(ggfortify)
-pca_res <- prcomp(natives_short, scale. = TRUE)
-autoplot(pca_res, label = T, loadings = T)
 
+## Control vs not
+natives_con <- natives_con %>% 
+                  mutate(presence = "absent") %>% 
+                  mutate(Area = as.factor(Area))
+natives_present <- natives_present %>% 
+                      mutate(presence = "present")
+# combining 'control' and 'present'
+control_combo <- full_join(natives_con, natives_present)
 
-natives_dist <- vegdist(natives_short, "bray")
-res <- pcoa(natives_dist)
-res$values
-biplot(res)
+control_combo <- control_combo %>% 
+                  mutate(groupings = case_when(Area == "1" & presence == "absent" ~ "absent1",
+                                               Area == "2" & presence == "absent" ~ "absent2",
+                                               Area == "3" & presence == "absent" ~ "absent3",
+                                               Area == "4" & presence == "absent" ~ "absent4",
+                                               Area == "1" & presence == "present" ~ "present1",
+                                               Area == "2" & presence == "present" ~ "present2",
+                                               Area == "3" & presence == "present" ~ "present3",
+                                               Area == "4" & presence == "present" ~ "present4")) %>%
+                  group_by(groupings) %>% 
+                  add_count(Artnamn, name = "abundance")
+
+combo_short <- control_combo %>% 
+                  dplyr::select(Artnamn, presence, groupings, abundance) %>% 
+                  mutate(abundance = as.numeric(abundance)) %>% 
+                  pivot_wider(names_from = Artnamn,
+                              values_from = abundance,
+                              values_fn = mean)
+
+combo_short[is.na(combo_short)] <- 0   
+
+combo_short <- data.frame(combo_short, row.names = "groupings")  
+combo_short <- as.matrix(combo_short)   
+combo_short <- combo_short[, -1]
+combo_short <- matrix(as.numeric(1:11))
+
+# doing the ordination (distance matrix)
+control_NMDS <- metaMDS(combo_short, distance = "bray", k = 2)
+# no convergence, not enough data 
+
+biplot(pcoa(vegdist(natives_short, "bray")))
